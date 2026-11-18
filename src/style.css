@@ -80,7 +80,7 @@ td { font-variant-numeric: tabular-nums; }
 .acoes { white-space: nowrap; text-align: right; }
 .acoes button { padding: .3rem .65rem; font-size: .86rem; }
 .acoes button + button { margin-left: .25rem; }
-.foto { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid var(--borda); display: block; }
+.foto { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid var(--borda); background: var(--superficie); padding: 3px; display: block; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
 
 .selo { display: inline-block; padding: .12rem .6rem; border-radius: 999px; font-size: .76rem; font-weight: 650; letter-spacing: .02em; white-space: nowrap; background: #eceeec; color: var(--suave); }
 .s-pendente { background: #fbf3dc; color: #6e5300; }
@@ -112,18 +112,15 @@ td { font-variant-numeric: tabular-nums; }
 @media (max-width: 560px) { .campos { grid-template-columns: 1fr; } .modal { padding: 1.1rem; margin: .5rem 0; } }
 
 /* ---------- Login e cadastro ---------- */
-.auth { display: grid; grid-template-columns: minmax(300px, 5fr) 7fr; min-height: 100vh; }
-.auth-marca { background: var(--lateral); color: #fff; padding: 3rem; display: flex; flex-direction: column; justify-content: space-between; }
-.auth-marca-topo { font-size: 1.15rem; font-weight: 650; letter-spacing: -.01em; }
-.auth-marca p { margin: 0; max-width: 22rem; font-size: 1.35rem; line-height: 1.4; color: #dbe5df; letter-spacing: -.01em; }
+.auth { display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh; }
+.auth-cabecalho { background: var(--lateral); color: #fff; padding: 1.1rem 2rem; font-size: 1.15rem; font-weight: 650; letter-spacing: -.01em; }
+.auth-rodape { background: var(--lateral); color: #dbe5df; padding: 1.1rem 2rem; text-align: center; font-size: .95rem; line-height: 1.4; }
 .auth-form { display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; }
 .auth-caixa { width: 100%; max-width: 400px; }
 .auth-caixa h1 { margin-bottom: 1.5rem; }
 .auth-caixa .primario { width: 100%; padding: .65rem; margin-top: .25rem; }
 .rodape { margin: 1.5rem 0 0; text-align: center; color: var(--suave); font-size: .92rem; }
 @media (max-width: 760px) {
-  .auth { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-  .auth-marca { padding: 1rem 1.25rem; }
-  .auth-marca p { display: none; }
+  .auth-cabecalho, .auth-rodape { padding: 1rem 1.25rem; }
   .auth-form { align-items: flex-start; padding-top: 2rem; }
 }
