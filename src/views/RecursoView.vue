@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { atualizar, criar, listar, remover } from '../api/crud';
-import { ApiError } from '../api/http';
-import { porRota, type Campo, type Linha, type Opcao } from '../recursos';
+import CamposFormulario from '../components/CamposFormulario.vue';
+import { atualizar, buscar, criar, listar, remover } from '../api/crud';
+import { ApiError, sessao, urlFoto } from '../api/http';
+import { payload, porRota, visivelPara, type AcaoLinha, type Campo, type Linha, type Opcao } from '../recursos';
 
-const props = defineProps<{ recurso: string }>();
+// `registro`: tela "Meu perfil", com somente o cadastro da própria conta.
+const props = defineProps<{ recurso: string; registro?: number }>();
 const rec = computed(() => porRota(props.recurso));
+const perfil = computed(() => sessao.conta!.perfil!);
+const visivel = computed(() => visivelPara(perfil.value));
+
+const titulo = computed(() => props.registro ? 'Meu perfil' : rec.value.telas[perfil.value] ?? rec.value.titulo);
+// A interface só oferece o que o perfil pode fazer; a API confere de novo cada operação.
+const podeEscrever = computed(() => !props.registro && !!rec.value.escrita?.includes(perfil.value));
+const podeEditar = computed(() => podeEscrever.value || !!props.registro);
+const acoes = computed(() => (rec.value.acoes ?? []).filter((a) => a.perfis.includes(perfil.value)));
+const colunas = computed(() => rec.value.colunas.filter(visivel.value));
 
 const linhas = ref<Linha[]>([]);
 const opcoesFk = ref<Record<string, Linha[]>>({});
@@ -19,23 +30,39 @@ const form = ref<Linha>({});
 const erroForm = ref('');
 const salvando = ref(false);
 
-const camposForm = computed<Campo[]>(() => (editando.value && rec.value.camposEdicao) || rec.value.campos);
-const fks = computed(() => [...new Set([...rec.value.campos, ...(rec.value.camposEdicao ?? []), ...rec.value.colunas].map((c) => c.fk).filter(Boolean))] as string[]);
+const camposForm = computed<Campo[]>(() => ((editando.value && rec.value.camposEdicao) || rec.value.campos).filter(visivel.value));
+const fks = computed(() => {
+  const campos = podeEditar.value ? [...rec.value.campos, ...(rec.value.camposEdicao ?? [])].filter(visivel.value) : [];
+  return [...new Set([...campos, ...colunas.value].map((c) => c.fk).filter(Boolean))] as string[];
+});
+
+// Registros citados na tabela que a listagem do perfil não traz (ex.: animal já adotado nos pedidos do adotante).
+async function completarFks() {
+  for (const c of colunas.value.filter((c) => c.fk)) {
+    const alvo = porRota(c.fk!);
+    const conhecidos = new Set((opcoesFk.value[c.fk!] ?? []).map((l) => l[alvo.id]));
+    const faltando = [...new Set(linhas.value.map((l) => l[c.chave]).filter((id) => id != null && !conhecidos.has(id)))];
+    const achados = await Promise.all(faltando.map((id) => buscar(c.fk!, id).catch(() => null)));
+    opcoesFk.value[c.fk!] = [...(opcoesFk.value[c.fk!] ?? []), ...achados.filter((l): l is Linha => l !== null)];
+  }
+}
 
 async function carregar() {
   carregando.value = true;
   erro.value = '';
   try {
-    const [dados, ...extras] = await Promise.all([listar(rec.value.rota), ...fks.value.map((f) => listar(f))]);
+    const principal = props.registro ? buscar(rec.value.rota, props.registro).then((l) => [l]) : listar(rec.value.rota);
+    const [dados, ...extras] = await Promise.all([principal, ...fks.value.map((f) => listar(f))]);
     linhas.value = dados;
     opcoesFk.value = Object.fromEntries(fks.value.map((f, i) => [f, extras[i]]));
+    await completarFks();
   } catch (e) {
     erro.value = e instanceof ApiError ? e.completa : 'Erro ao carregar os dados.';
   } finally {
     carregando.value = false;
   }
 }
-watch(() => props.recurso, () => { formAberto.value = false; aviso.value = ''; carregar(); }, { immediate: true });
+watch(() => [props.recurso, props.registro], () => { formAberto.value = false; aviso.value = ''; carregar(); }, { immediate: true });
 
 function opcoes(c: Campo): Opcao[] {
   if (c.opcoes) return c.opcoes;
@@ -71,7 +98,7 @@ function abrirNovo() {
 function abrirEdicao(l: Linha) {
   editando.value = l;
   const f: Linha = {};
-  for (const c of rec.value.camposEdicao ?? rec.value.campos) {
+  for (const c of (rec.value.camposEdicao ?? rec.value.campos).filter(visivel.value)) {
     const v = l[c.chave];
     f[c.chave] = c.tipo === 'date' && typeof v === 'string' ? v.slice(0, 10) : v ?? (c.tipo === 'checkbox' ? false : '');
   }
@@ -80,24 +107,13 @@ function abrirEdicao(l: Linha) {
   formAberto.value = true;
 }
 
-function payload(): Linha {
-  const dados: Linha = {};
-  for (const c of camposForm.value) {
-    const v = form.value[c.chave];
-    if (c.tipo === 'checkbox') dados[c.chave] = !!v;
-    else if (v === '' || v === null || v === undefined) dados[c.chave] = c.obrigatorio ? undefined : null;
-    else dados[c.chave] = c.tipo === 'number' || (c.tipo === 'select' && c.fk) ? Number(v) : v;
-  }
-  return dados;
-}
-
 async function salvar() {
   erroForm.value = '';
   salvando.value = true;
   try {
     const id = editando.value?.[rec.value.id];
-    if (editando.value) await atualizar(rec.value.rota, id, payload());
-    else await criar(rec.value.rota, payload());
+    if (editando.value) await atualizar(rec.value.rota, id, payload(camposForm.value, form.value));
+    else await criar(rec.value.rota, payload(camposForm.value, form.value));
     formAberto.value = false;
     aviso.value = editando.value ? 'Registro atualizado.' : 'Registro criado.';
     await carregar();
@@ -120,38 +136,57 @@ async function excluir(l: Linha) {
     erro.value = e instanceof ApiError ? e.completa : 'Erro ao excluir.';
   }
 }
+
+const executando = ref(false);
+async function executar(acao: AcaoLinha, l: Linha) {
+  aviso.value = '';
+  erro.value = '';
+  executando.value = true;
+  try {
+    await acao.executar(l);
+    aviso.value = acao.sucesso;
+    await carregar();
+  } catch (e) {
+    erro.value = e instanceof ApiError ? e.completa : 'Erro ao executar a ação.';
+  } finally {
+    executando.value = false;
+  }
+}
 </script>
 
 <template>
   <section>
     <div class="cabecalho">
       <div>
-        <h1>{{ rec.titulo }}</h1>
-        <p v-if="!carregando && linhas.length" class="sub">{{ linhas.length }} {{ linhas.length === 1 ? 'registro' : 'registros' }}</p>
+        <h1>{{ titulo }}</h1>
+        <p v-if="!carregando && linhas.length && !registro" class="sub">{{ linhas.length }} {{ linhas.length === 1 ? 'registro' : 'registros' }}</p>
       </div>
-      <button class="primario" type="button" @click="abrirNovo">Novo cadastro</button>
+      <button v-if="podeEscrever" class="primario" type="button" @click="abrirNovo">Novo cadastro</button>
     </div>
 
     <p v-if="aviso" class="sucesso">{{ aviso }}</p>
     <p v-if="erro" class="erro" role="alert">{{ erro }} <button type="button" class="link" @click="carregar">Tentar novamente</button></p>
     <p v-if="carregando" class="vazio">Carregando...</p>
-    <p v-else-if="!erro && !linhas.length" class="vazio">Nenhum registro cadastrado ainda.</p>
+    <p v-else-if="!erro && !linhas.length" class="vazio">Nenhum registro encontrado.</p>
 
     <div v-else-if="linhas.length" class="tabela-wrap">
       <table>
         <thead>
-          <tr><th v-for="c in rec.colunas" :key="c.chave">{{ c.rotulo }}</th><th class="acoes">Ações</th></tr>
+          <tr><th v-for="c in colunas" :key="c.chave">{{ c.rotulo }}</th><th v-if="podeEditar || acoes.length" class="acoes">Ações</th></tr>
         </thead>
         <tbody>
           <tr v-for="l in linhas" :key="l[rec.id]">
-            <td v-for="c in rec.colunas" :key="c.chave" :data-rotulo="c.rotulo">
-              <img v-if="c.tipo === 'foto' && l[c.chave]" :src="l[c.chave]" alt="" class="foto" loading="lazy" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+            <td v-for="c in colunas" :key="c.chave" :data-rotulo="c.rotulo">
+              <img v-if="c.tipo === 'foto' && l[c.chave]" :src="urlFoto(l[c.chave])" alt="" class="foto" loading="lazy" @error="($event.target as HTMLImageElement).style.display = 'none'" />
               <span v-else-if="c.tipo === 'status'" class="selo" :class="'s-' + l[c.chave].toLowerCase().replace(' ', '-')">{{ l[c.chave] }}</span>
               <template v-else>{{ valorCelula(l, c) }}</template>
             </td>
-            <td class="acoes">
-              <button type="button" @click="abrirEdicao(l)">Editar</button>
-              <button type="button" class="perigo" @click="excluir(l)">Excluir</button>
+            <td v-if="podeEditar || acoes.length" class="acoes">
+              <template v-for="a in acoes" :key="a.rotulo">
+                <button v-if="!a.visivel || a.visivel(l)" type="button" :class="{ primario: a.primaria }" :disabled="executando" @click="executar(a, l)">{{ a.rotulo }}</button>
+              </template>
+              <button v-if="podeEditar" type="button" @click="abrirEdicao(l)">Editar</button>
+              <button v-if="podeEscrever" type="button" class="perigo" @click="excluir(l)">Excluir</button>
             </td>
           </tr>
         </tbody>
@@ -161,19 +196,7 @@ async function excluir(l: Linha) {
     <div v-if="formAberto" class="fundo" @click.self="formAberto = false">
       <form class="modal" @submit.prevent="salvar">
         <h2>{{ editando ? 'Editar' : 'Novo' }} · {{ rec.singular }}</h2>
-        <div class="campos">
-        <label v-for="c in camposForm" :key="c.chave" :class="{ inline: c.tipo === 'checkbox', cheio: c.tipo === 'textarea' || c.tipo === 'checkbox' || c.chave === 'endereco' }">
-          <span>{{ c.rotulo }}<b v-if="c.obrigatorio"> *</b></span>
-          <textarea v-if="c.tipo === 'textarea'" v-model="form[c.chave]" rows="3" />
-          <select v-else-if="c.tipo === 'select'" v-model="form[c.chave]" :required="c.obrigatorio">
-            <option value="" disabled>Selecione...</option>
-            <option v-for="o in opcoes(c)" :key="o.valor" :value="o.valor">{{ o.rotulo }}</option>
-          </select>
-          <input v-else-if="c.tipo === 'checkbox'" v-model="form[c.chave]" type="checkbox" @change="rec.aoMudar?.(form)" />
-          <input v-else v-model="form[c.chave]" :type="c.tipo" :required="c.obrigatorio" :maxlength="c.max" :min="c.min" :step="c.tipo === 'number' ? 1 : undefined" :disabled="c.desabilitado?.(form)" />
-          <small v-if="c.dica">{{ c.dica }}</small>
-        </label>
-        </div>
+        <CamposFormulario :campos="camposForm" :form="form" :opcoes="opcoes" :ao-mudar="rec.aoMudar" />
         <p v-if="erroForm" class="erro" role="alert">{{ erroForm }}</p>
         <div class="botoes">
           <button type="button" @click="formAberto = false">Cancelar</button>
